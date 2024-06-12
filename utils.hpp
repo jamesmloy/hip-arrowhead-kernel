@@ -125,3 +125,243 @@ private:
   DType _corner;
   int _rows;
 };
+
+
+__global__ void
+xlCalculation(int const valsPerBlock,
+              double const* botRows,
+              double const* sources,
+              double const* diags,
+              double const* rightCols,
+              double const* cornerVals,
+              double const* lastSource,
+              double* xl);
+
+__global__ void
+xiCalculation(int const valsPerCell,
+              int const totVals,
+              double const* xl,
+              double const* rightCols,
+              double const* diags,
+              double const* sources,
+              double* xi);
+
+
+#if 1
+template <typename T>
+class ArrowheadSystem
+{
+public:
+  using VecOfVec = ContiguousVecOfVec<T>;
+
+  template <typename RndGen>
+  ArrowheadSystem(int const nCells, int const nKcells, RndGen &gen, T const minVal = 0.5, T const maxVal = 1.5)
+    : _nCells(nCells)
+    , _nKcells(nKcells)
+    , _diags(nCells, nKcells)
+    , _rightCols(nCells, nKcells)
+    , _botRows(nCells, nKcells)
+    , _cornerVals()
+    , _sources(nCells, nKcells)
+    , _lastSource(nCells, 0)
+    , _xlExpected(nCells, 0)
+    , _xiExpected(nCells, nKcells)
+  {
+    _diags.randomize(gen, minVal, maxVal);
+
+    // right columns, set these as opposite the
+    // diagonal
+    for (int i = 0; i < nCells * nKcells; ++i)
+      _rightCols[i] = -_diags[i] * 0.5;
+
+    _botRows.randomize(gen, minVal, maxVal);
+
+    _cornerVals.reserve(nCells);
+    for (int i = 0; i < nCells; ++i) {
+      auto begEnd = _botRows.row(i);
+      _cornerVals.push_back(-std::accumulate(begEnd.first, begEnd.second, 0.0));
+    }
+
+    _xiExpected.randomize(gen, minVal, maxVal);
+    std::uniform_real_distribution<double> dis(0.5, 1.5);
+    for (int i = 0; i < nCells; ++i)
+      _xlExpected[i] = dis(gen);
+
+    for (int c = 0; c < nCells; ++c) {
+      for (int k = 0; k < nKcells; ++k) {
+        int const i = c * nKcells + k;
+        _sources[i] = _diags[i] * _xiExpected[i] + _rightCols[i] * _xlExpected[c];
+        _lastSource[c] += _botRows[i] * _xiExpected[i];
+      }
+      _lastSource[c] += _cornerVals[c] * _xlExpected[c];
+    }
+
+    allocateDeviceMemory();
+  }
+
+  ~ArrowheadSystem()
+  {
+    // diagonals
+    hipFree(_devDiag);
+    // right columns
+    hipFree(_devRightCols);
+    // bottom rows
+    hipFree(_devBotRows);
+    // source term
+    hipFree(_devSource);
+    // result vector for the second result
+    hipFree(_devXi);
+    // corner value of the matrix
+    hipFree(_devCornerVals);
+    // the last source term
+    hipFree(_devLastSources);
+    // result vector for the first result
+    hipFree(_devXl);
+  }
+
+  void solve(std::vector<double> &xl, VecOfVec &xi)
+  {
+    int const threadsPerBlock = 128;
+    int const numRows = _nCells * _nKcells;
+    int const blocks = (numRows + threadsPerBlock - 1) / threadsPerBlock;
+    dim3 reduceBlockDim(_nCells, 1, 1);
+    dim3 reduceThreadDim(threadsPerBlock, 1, 1);
+    dim3 blockDim(blocks, 1, 1);
+    dim3 threadDim(threadsPerBlock, 1, 1 );
+
+    auto const numBytes = _diags.numBytes();
+
+    // result vector for the second result
+    HIP_CHECK(hipMalloc(&_devXi, numBytes));
+    // HIP_CHECK(hipMemcpy(_devXi, xi.data(), numBytes, hipMemcpyHostToDevice));
+
+    // result vector for the first result
+    HIP_CHECK(hipMalloc(&_devXl, _nCells * sizeof(T)));
+    // HIP_CHECK(hipMemcpy(_devXl,
+    //                     xl.data(),
+    //                     _nCells * sizeof(T),
+    //                     hipMemcpyHostToDevice));
+
+    hipLaunchKernelGGL(xlCalculation,
+                       reduceBlockDim,
+                       reduceThreadDim,
+                       threadsPerBlock * sizeof(T),
+                       0,
+                       _nKcells,
+                       _devBotRows,
+                       _devSource,
+                       _devDiag,
+                       _devRightCols,
+                       _devCornerVals,
+                       _devLastSources,
+                       _devXl);
+    HIP_CHECK(hipGetLastError());
+
+    HIP_CHECK(hipMemcpy(
+      xl.data(), _devXl, _nCells * sizeof(T), hipMemcpyDeviceToHost));
+
+    hipLaunchKernelGGL(xiCalculation,
+                       blockDim,
+                       threadDim,
+                       0,
+                       0,
+                       _nKcells,
+                       numRows,
+                       _devXl,
+                       _devRightCols,
+                       _devDiag,
+                       _devSource,
+                       _devXi);
+    HIP_CHECK(hipGetLastError());
+
+    HIP_CHECK(
+      hipMemcpy(xi.data(), _devXi, numBytes, hipMemcpyDeviceToHost));
+  }
+
+  std::vector<T> const& xlExpected() const
+  { return _xlExpected; }
+  VecOfVec const& xiExpected() const
+  { return _xiExpected; }
+
+private:
+
+  void allocateDeviceMemory()
+  {
+    auto const numBytes = _diags.numBytes();
+
+    // diagonals
+    HIP_CHECK(hipMalloc(&_devDiag, numBytes));
+    HIP_CHECK(
+      hipMemcpy(_devDiag, _diags.data(), numBytes, hipMemcpyHostToDevice));
+
+    // right columns
+    HIP_CHECK(hipMalloc(&_devRightCols, numBytes));
+    HIP_CHECK(hipMemcpy(
+      _devRightCols, _rightCols.data(), numBytes, hipMemcpyHostToDevice));
+
+    // bottom rows
+    HIP_CHECK(hipMalloc(&_devBotRows, numBytes));
+    HIP_CHECK(
+      hipMemcpy(_devBotRows, _botRows.data(), numBytes, hipMemcpyHostToDevice));
+
+    // source term
+    HIP_CHECK(hipMalloc(&_devSource, numBytes));
+    HIP_CHECK(
+      hipMemcpy(_devSource, _sources.data(), numBytes, hipMemcpyHostToDevice));
+
+    // corner value of the matrix
+    HIP_CHECK(hipMalloc(&_devCornerVals, _nCells * sizeof(T)));
+    HIP_CHECK(hipMemcpy(_devCornerVals,
+                        _cornerVals.data(),
+                        _nCells * sizeof(T),
+                        hipMemcpyHostToDevice));
+
+    // the last source term
+    HIP_CHECK(hipMalloc(&_devLastSources, _nCells * sizeof(T)));
+    HIP_CHECK(hipMemcpy(_devLastSources,
+                        _lastSource.data(),
+                        _nCells * sizeof(T),
+                        hipMemcpyHostToDevice));
+  }
+
+  int const _nCells;
+  int const _nKcells;
+
+  //
+  // HOST MEMORY
+  //
+  // matrix coefficients
+  VecOfVec _diags;
+  VecOfVec _rightCols;
+  VecOfVec _botRows;
+  std::vector<T> _cornerVals;
+
+  // source terms
+  VecOfVec _sources;
+  std::vector<T> _lastSource;
+
+  // expected solution
+  std::vector<T> _xlExpected;
+  VecOfVec _xiExpected;
+
+  //
+  // DEVICE MEMORY
+  //
+  // diagonals
+  T* _devDiag = nullptr;
+  // right columns
+  T* _devRightCols = nullptr;
+  // bottom rows
+  T* _devBotRows = nullptr;
+  // source term
+  T* _devSource = nullptr;
+  // result vector for the second result
+  T* _devXi = nullptr;
+  // corner value of the matrix
+  T* _devCornerVals = nullptr;
+  // the last source term
+  T* _devLastSources = nullptr;
+  // result vector for the first result
+  T* _devXl = nullptr;
+};
+#endif
