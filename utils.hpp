@@ -231,17 +231,6 @@ public:
 
     auto const numBytes = _diags.numBytes();
 
-    // result vector for the second result
-    HIP_CHECK(hipMalloc(&_devXi, numBytes));
-    // HIP_CHECK(hipMemcpy(_devXi, xi.data(), numBytes, hipMemcpyHostToDevice));
-
-    // result vector for the first result
-    HIP_CHECK(hipMalloc(&_devXl, _nCells * sizeof(T)));
-    // HIP_CHECK(hipMemcpy(_devXl,
-    //                     xl.data(),
-    //                     _nCells * sizeof(T),
-    //                     hipMemcpyHostToDevice));
-
     hipLaunchKernelGGL(xlCalculation,
                        reduceBlockDim,
                        reduceThreadDim,
@@ -322,6 +311,17 @@ private:
                         _lastSource.data(),
                         _nCells * sizeof(T),
                         hipMemcpyHostToDevice));
+
+    // result vector for the second result
+    HIP_CHECK(hipMalloc(&_devXi, numBytes));
+    // HIP_CHECK(hipMemcpy(_devXi, xi.data(), numBytes, hipMemcpyHostToDevice));
+
+    // result vector for the first result
+    HIP_CHECK(hipMalloc(&_devXl, _nCells * sizeof(T)));
+    // HIP_CHECK(hipMemcpy(_devXl,
+    //                     xl.data(),
+    //                     _nCells * sizeof(T),
+    //                     hipMemcpyHostToDevice));
   }
 
   int const _nCells;

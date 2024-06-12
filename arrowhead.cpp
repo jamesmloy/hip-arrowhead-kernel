@@ -5,6 +5,7 @@
 #include <random>
 #include <vector>
 #include <fstream>
+#include <chrono>
 
 #include "utils.hpp"
 
@@ -39,9 +40,6 @@ main()
   std::string const resultFile = "results.json";
 
   auto const config = getConfig(configFile);
-
-  int const nCells = config["cell_counts"][0];
-  int const nKcells = config["kcell_counts"][0];
   int const deviceId = 0;
   gen.seed(1);
 
@@ -49,30 +47,44 @@ main()
   auto const props = getDeviceProps(deviceId);
   std::cout << props << std::endl;
 
-  // xl value, this will store the first result
-  std::vector<double> xlValues(nCells, 0);
-  // xi value, this will store the second result
-  auto xiValues = VecOfVec(nCells, nKcells);
+  std::cout << std::setprecision(9);
 
-  gen.seed(1);
-  ArrowheadSystem<double> ahs(nCells, nKcells, gen);
+  int const trials = config["trials"];
+  for (int const &nCells: config["cell_counts"])
+  {
+    for (int const &nKcells: config["kcell_counts"])
+    {
+      // xl value, this will store the first result
+      std::vector<double> xlValues(nCells, 0);
+      // xi value, this will store the second result
+      auto xiValues = VecOfVec(nCells, nKcells);
 
-  ahs.solve(xlValues, xiValues);
-
-  auto const& xlExpected = ahs.xlExpected();
-  auto const& xiExpected = ahs.xiExpected();
-
+      ArrowheadSystem<double> ahs(nCells, nKcells, gen);
+      const auto start = std::chrono::high_resolution_clock::now();
+      for (int t = 0; t < trials; ++t)
+      {
+        ahs.solve(xlValues, xiValues);
+      }
+      const auto end = std::chrono::high_resolution_clock::now();
+      const std::chrono::duration<double> diff =
+        std::chrono::duration_cast<std::chrono::nanoseconds>(end - start);
+      std::cout << "Time to solve [" << nCells << ", " <<
+        nKcells << "]: " << double(diff.count())/double(trials) << " ns\n";
 
 #ifdef DIAGNOSTIC
-  for (int c = 0; c < nCells; ++c) {
-    for (int k = 0; k < nKcells; ++k) {
-      int const i = c * nKcells + k;
-      std::cout << "[" << c << ", " << k << "]: Expected " << xiExpected[i]
-                << ", Actual: " << xiValues[i] << std::endl;
-    }
+      auto const& xlExpected = ahs.xlExpected();
+      auto const& xiExpected = ahs.xiExpected();
+      for (int c = 0; c < nCells; ++c) {
+        for (int k = 0; k < nKcells; ++k) {
+          int const i = c * nKcells + k;
+          std::cout << "[" << c << ", " << k << "]: Expected " << xiExpected[i]
+                    << ", Actual: " << xiValues[i] << std::endl;
+        }
 
-    std::cout << "[" << c << ", " << nKcells << "]: Expected " << xlExpected[c]
-              << ", Actual: " << xlValues[c] << std::endl;
-  }
+        std::cout << "[" << c << ", " << nKcells << "]: Expected " << xlExpected[c]
+                  << ", Actual: " << xlValues[c] << std::endl;
+      }
 #endif
+    }
+  }
 }
