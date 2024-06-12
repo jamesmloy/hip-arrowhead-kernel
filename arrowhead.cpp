@@ -1,120 +1,72 @@
 #include "hip/hip_runtime.h"
+#include "deps/json.hpp"
 #include <iostream>
 #include <numeric>
 #include <random>
 #include <vector>
+#include <fstream>
 
 #include "utils.hpp"
+
+using json = nlohmann::json;
 
 std::random_device rd;
 std::mt19937 gen(rd());
 
-#define HIP_ENABLE_PRINTF
-
 __global__ void
 xlCalculation(int const valsPerBlock,
-              double const* botRows,    // ncells * nkcells
-              double const* sources,    // ncells * nkcells
-              double const* diags,      // ncells * nkcells
-              double const* rightCols,  // ncells * nkcells
-              double const* cornerVals, // ncells
-              double const* lastSource, // ncells
-              double* xl)               // ncells, output
-{
-  HIP_DYNAMIC_SHARED(double, toSum);
-
-  int const tid = threadIdx.x;
-  int const iterations = (valsPerBlock + blockDim.x - 1) / blockDim.x;
-  int const globIdxStart = valsPerBlock * blockIdx.x;
-
-  double num = lastSource[blockIdx.x];
-  double den = cornerVals[blockIdx.x];
-
-  // sum numerator
-  for (int it = 0; it < iterations; ++it) {
-    int const countOnBlock = tid + blockDim.x * it;
-    int const globIdx = globIdxStart + countOnBlock;
-    int const inRange = int(countOnBlock < valsPerBlock);
-
-    // load values to local memory, masking remainder
-    toSum[tid] = botRows[globIdx] * sources[globIdx] / diags[globIdx] * inRange;
-    __syncthreads();
-    if (inRange) {
-      // tree based sum
-      for (int s = blockDim.x / 2; s > 0; s >>= 1) {
-        if (tid < s) {
-          toSum[tid] += toSum[tid + s];
-        }
-        __syncthreads();
-      }
-    }
-    if (tid == 0) {
-      num -= toSum[0];
-      // printf("num %f\n", num);
-    }
-  }
-
-
-  // sum denomenator
-  for (int it = 0; it < iterations; ++it) {
-    int const countOnBlock = tid + blockDim.x * it;
-    int const globIdx = globIdxStart + countOnBlock;
-    int const inRange = int(countOnBlock < valsPerBlock);
-
-    // load values to local memory, masking remainder
-    toSum[tid] =
-      botRows[globIdx] * rightCols[globIdx] / diags[globIdx] * inRange;
-    __syncthreads();
-    if (inRange) {
-      // tree based sum
-      for (int s = blockDim.x / 2; s > 0; s >>= 1) {
-        if (tid < s) {
-          toSum[tid] += toSum[tid + s];
-        }
-        __syncthreads();
-      }
-    }
-    if (tid == 0) {
-      den -= toSum[0];
-      // printf("den %f\n", den);
-    }
-  }
-
-
-  if (tid == 0)
-    xl[blockIdx.x] = num / den;
-}
+              double const* botRows,
+              double const* sources,
+              double const* diags,
+              double const* rightCols,
+              double const* cornerVals,
+              double const* lastSource,
+              double* xl);
 
 __global__ void
 xiCalculation(int const valsPerCell,
               int const totVals,
-              double const* xl,        // ncells
-              double const* rightCols, // ncells * nkcells
-              double const* diags,     // ncells * nkcells
-              double const* sources,   // ncells * nkcells
-              double* xi)              // ncells * nkcells, output
-{
-  int const i = threadIdx.x + blockIdx.x * blockDim.x;
-  int const cellIdx = i / valsPerCell;
-
-  if (i < totVals) {
-    xi[i] = sources[i] / diags[i] - rightCols[i] * xl[cellIdx] / diags[i];
-  }
-}
+              double const* xl,
+              double const* rightCols,
+              double const* diags,
+              double const* sources,
+              double* xi);
 
 using VecOfVec = ContiguousVecOfVec<double>;
+
+json getConfig(std::string const& configFile)
+{
+  try
+  {
+    std::cout << "Reading config file\n";
+    std::ifstream f(configFile);
+    return json::parse(f);
+  }
+  catch (std::exception const& e)
+  {
+    std::cout << "Could not read config file " << configFile
+              << " because of exception:\n"
+              << e.what() << std::endl;
+    return 1;
+  }
+}
 
 int
 main()
 {
-  int const nCells = 2;
-  int const nKcells = 100;
+  std::string const configFile = "config.json";
+  std::string const resultFile = "results.json";
+
+  auto const config = getConfig(configFile);
+
+  int const nCells = config["cell_counts"][0];
+  int const nKcells = config["kcell_counts"][0];
   int const deviceId = 0;
   int const threadsPerBlock = 128;
   int const numRows = nCells * nKcells;
   int const blocks = (numRows + threadsPerBlock - 1) / threadsPerBlock;
-  dim3 blockDim{ blocks, 1, 1 };
-  dim3 threadDim{ threadsPerBlock, 1, 1 };
+  dim3 blockDim{ static_cast<uint32_t>(blocks), 1, 1 };
+  dim3 threadDim{ static_cast<uint32_t>(threadsPerBlock), 1, 1 };
   gen.seed(1);
 
   hipSetDevice(deviceId);
@@ -177,17 +129,19 @@ main()
     lastSource[c] += cornerVals[c] * xlExpected[c];
   }
 
-  // for (int c = 0; c < nCells; ++c) {
-  //   for (int k = 0; k < nKcells; ++k) {
-  //     int const i = c * nKcells + k;
-  //     std::cout << "diag: " << diags[i] << ", right: " << rightCols[i]
-  //               << ", bot: " << botRows[i] << ", source: " << source[i]
-  //               << ", xi: " << xiExpected[i] << "\n";
-  //   }
-  //   std::cout << "corner: " << cornerVals[c]
-  //             << ", last source: " << lastSource[c] << ", xl: " << xlExpected[c]
-  //             << "\n";
-  // }
+#if DIAGNOSTIC
+  for (int c = 0; c < nCells; ++c) {
+    for (int k = 0; k < nKcells; ++k) {
+      int const i = c * nKcells + k;
+      std::cout << "diag: " << diags[i] << ", right: " << rightCols[i]
+                << ", bot: " << botRows[i] << ", source: " << source[i]
+                << ", xi: " << xiExpected[i] << "\n";
+    }
+    std::cout << "corner: " << cornerVals[c]
+              << ", last source: " << lastSource[c] << ", xl: " << xlExpected[c]
+              << "\n";
+  }
+#endif
 
   // generate device arrays
   auto const numBytes = diags.numBytes();
@@ -260,8 +214,8 @@ main()
                "=========\n\n";
 
   {
-    dim3 reduceBlockDim{ nCells, 1, 1 };
-    dim3 reduceThreadDim{ threadsPerBlock, 1, 1 };
+    dim3 reduceBlockDim{ static_cast<uint32_t>(nCells), 1, 1 };
+    dim3 reduceThreadDim{ static_cast<uint32_t>(threadsPerBlock), 1, 1 };
     hipLaunchKernelGGL(xlCalculation,
                        reduceBlockDim,
                        reduceThreadDim,
@@ -298,6 +252,7 @@ main()
       hipMemcpy(xiValues.data(), devXi, numBytes, hipMemcpyDeviceToHost));
   }
 
+#ifdef DIAGNOSTIC
   for (int c = 0; c < nCells; ++c) {
     for (int k = 0; k < nKcells; ++k) {
       int const i = c * nKcells + k;
@@ -308,4 +263,5 @@ main()
     std::cout << "[" << c << ", " << nKcells << "]: Expected " << xlExpected[c]
               << ", Actual: " << xlValues[c] << std::endl;
   }
+#endif
 }
