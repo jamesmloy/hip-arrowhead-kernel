@@ -27,13 +27,11 @@ $$
 x_i = -\frac{c_i}{d_i}x_l + \frac{b_i}{d_i}
 $$
 which we can then substitue into the bottom equation, combine terms, and rearrange into an equation for $x_l$:
-$$
-x_l = \frac{
+$$x_l = \frac{
   b_l - \sum\limits_{i=1}^{l-1}\frac{r_i b_i}{d_i}
 }{
   c_l - \sum\limits_{i=1}^{l-1}\frac{r_i c_i}{d_i}
-}
-$$
+}$$
 
 Thus one solution procedure is to solve for $x_l$ and then solve for the remaining $x_i$ values.
 
