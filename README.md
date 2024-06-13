@@ -8,8 +8,8 @@ The solution method for the BTE in this context is the finite volume method whic
 
 # Solution
 Given an arrowhead matrix linear system:
-$$
-\begin{matrix}
+
+$$\begin{matrix}
 d_1 x_1 + &     &      &  c_1 x_l  \\
     & d_2 x_2 + &        & c_2 x_l  \\
     &     & \ddots & \vdots\\
@@ -20,13 +20,14 @@ r_1 x_1 + & r_2 x_2 +& \dots  & c_l x_l
 =b_2\\
 \vdots\\
 =b_l
-\end{matrix}
-$$
+\end{matrix}$$
+
 we can solve for each $x_i$ ($i\neq l$):
-$$
-x_i = -\frac{c_i}{d_i}x_l + \frac{b_i}{d_i}
-$$
+
+$$x_i = -\frac{c_i}{d_i}x_l + \frac{b_i}{d_i}$$
+
 which we can then substitue into the bottom equation, combine terms, and rearrange into an equation for $x_l$:
+
 $$x_l = \frac{
   b_l - \sum\limits_{i=1}^{l-1}\frac{r_i b_i}{d_i}
 }{
