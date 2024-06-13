@@ -2,9 +2,9 @@
 GPU kernel for directly solving an arrowhead matrix written with HIP
 
 # Overview
-In this code, an arrowhead matrix is a sparse matrix which contains nonzeros on the diagonal, the bottom row, and the right-most column.  This sparsity pattern, and variations of it, arise when solving different variations of the Boltzmann transport equation (BTE) using the Coupled Ordinates Method (COMET).  Variations of the BTE include those for modeling phonon transport, molecular gas dynamics, electron transport, and radiative heat transfer.  Each variation leads to a slight difference to the matrix (i.e., the bottom two rows and the 2 right most columns are nonzero).
+In this code, an arrowhead matrix is a sparse square matrix which contains nonzeros on the diagonal, the bottom row, and the right-most column.  This sparsity pattern, and variations of it, arise when solving different variations of the Boltzmann transport equation (BTE) using the Coupled Ordinates Method (COMET).  Variations of the BTE include those for modeling phonon transport, molecular gas dynamics, electron transport, and radiative heat transfer.  Each variation leads to a slight difference to the matrix (i.e., the bottom two rows and the 2 right most columns are nonzero).
 
-The solution method for the BTE in this context is the finite volume method which gives us a linear system for each cell that yields an arrowhead matrix which can be solved directly.  So, for a finite volume mesh containing `nCells` cells, there will be `nCells` arrowhead matrices.  Each arrowhead matrix will contain `nKcells + 1` rows, where `nKcells` is the discretization in the 3-dimensional phase space.  This example will show how to solve each arrowhead linear system for each cell simultaneously for all `nCells` cells of a mesh.
+The solution method for the BTE in this context is the finite volume method which, in part, gives us a linear system for each cell that yields an arrowhead matrix which can be solved directly.  So, for a finite volume mesh containing `nCells` cells, there will be `nCells` arrowhead matrices.  Each arrowhead matrix will contain `nKcells + 1` rows, where `nKcells` is the discretization in the 3-dimensional phase space.  The extra row is a constraint equation across all of the 3-dimensional phase space at a cell.  This example will show how to solve each arrowhead linear system for each cell simultaneously for all `nCells` cells of a mesh.
 
 # Solution
 Given an arrowhead matrix linear system:
@@ -26,7 +26,7 @@ we can solve for each $x_i$ ($i\neq l$):
 
 $$x_i = -\frac{c_i}{d_i}x_l + \frac{b_i}{d_i}$$
 
-which we can then substitue into the bottom equation, combine terms, and rearrange into an equation for $x_l$:
+which we can then substitue the equations for each $x_i$ into the $l^{th}$ equation, combine terms, and rearrange into an equation for $x_l$:
 
 $$x_l = \frac{
   b_l - \sum\limits_{i=1}^{l-1}\frac{r_i b_i}{d_i}
@@ -34,7 +34,7 @@ $$x_l = \frac{
   c_l - \sum\limits_{i=1}^{l-1}\frac{r_i c_i}{d_i}
 }$$
 
-Thus one solution procedure is to solve for $x_l$ and then solve for the remaining $x_i$ values.
+Thus one possible solution procedure is to solve for $x_l$ and then solve for the remaining $x_i$ values.
 
 # Code Descripition
 The code is split out into 3 files, the entrypoint `arrowhead.cpp`, the kernel definitions `kernels.cpp`, and utilities `utils.hpp`.
@@ -44,6 +44,9 @@ The problem we're solving will have `nCells` cells, each containing an arrowhead
 
 ## Algorithm
 ### Solving $x_l$
-Solving for $x_l$ is mainly comprised of 2 reduction operations across `nKcells` values, followed by a single division operation.  The reduction for each cells takes place on its own block to take advantage of fast shared memory.  The reductions are performed in a tree like manner making use of sequential addressing to reduce memory bank conflicts.
+Solving for $x_l$ is mainly comprised of 2 reduction operations across `nKcells` values, followed by a single division operation.  The reduction for each cell takes place on its own block to take advantage of fast shared memory.  The reductions are performed in a tree like manner making use of sequential traversal to reduce memory bank conflicts.
 ### Solving for $x_i$
 Solving for $x_i$ is much more straighforward as it is embarassingly parallel.  Each computation is distributed across blocks.  The number of blocks is determined based on the number of computations and a preconfigured number of threads per block.
+
+# Next Optimization
+There are potential performance gains to be had by optimizing the $x_l$ calculation further.  In this kernel, each thread loads a value from shared memory, but immediately after that half the threads are unused.  So, we should be able to achieve a little under a 2x speedup by performing the first level of sums on each thread by virtually increasing the block size by a factor of 2.  With this, each thread will load 2 values: one value at (loosley speaking) `blockIdx.x * blockDim.x * 2 + threadIdx.x` and one at `blockIdx.x * blockDim.x * 2 + blockDim.x + threadIdx.x`.  Immediately after the load, the first sum can happen on all threads.
