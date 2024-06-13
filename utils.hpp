@@ -147,7 +147,6 @@ xiCalculation(int const valsPerCell,
               double* xi);
 
 
-#if 1
 template <typename T>
 class ArrowheadSystem
 {
@@ -364,4 +363,3 @@ private:
   // result vector for the first result
   T* _devXl = nullptr;
 };
-#endif
