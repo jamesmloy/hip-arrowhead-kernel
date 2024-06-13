@@ -1,0 +1,58 @@
+{
+  "results": [
+    {
+      "allocate_time": 0.239478712,
+      "n_cells": 100,
+      "n_kcells": 256,
+      "solve_time": 0.0004117388
+    },
+    {
+      "allocate_time": 0.013263275,
+      "n_cells": 100,
+      "n_kcells": 512,
+      "solve_time": 0.0001038124
+    },
+    {
+      "allocate_time": 0.027375972,
+      "n_cells": 100,
+      "n_kcells": 1024,
+      "solve_time": 0.00016086519999999999
+    },
+    {
+      "allocate_time": 0.070148913,
+      "n_cells": 1000,
+      "n_kcells": 256,
+      "solve_time": 0.00019442599999999998
+    },
+    {
+      "allocate_time": 0.137641644,
+      "n_cells": 1000,
+      "n_kcells": 512,
+      "solve_time": 0.0002399312
+    },
+    {
+      "allocate_time": 0.271133834,
+      "n_cells": 1000,
+      "n_kcells": 1024,
+      "solve_time": 0.0005512678
+    },
+    {
+      "allocate_time": 66.902904747,
+      "n_cells": 1000000,
+      "n_kcells": 256,
+      "solve_time": 0.12222199959999999
+    },
+    {
+      "allocate_time": 133.550152834,
+      "n_cells": 1000000,
+      "n_kcells": 512,
+      "solve_time": 0.21753433260000002
+    },
+    {
+      "allocate_time": 267.184690375,
+      "n_cells": 1000000,
+      "n_kcells": 1024,
+      "solve_time": 0.4472125462
+    }
+  ]
+}

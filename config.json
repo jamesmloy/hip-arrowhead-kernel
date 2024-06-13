@@ -1,5 +1,5 @@
 {
-  "cell_counts": [100, 1000, 10000],
+  "cell_counts": [100, 1000, 1000000],
   "kcell_counts": [256, 512, 1024],
   "trials": 5
 }
